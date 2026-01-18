@@ -1,5 +1,2 @@
-fastapi
-pandas
-numpy
-pydantic
-uvicorn
+flask 
+flask-cors
