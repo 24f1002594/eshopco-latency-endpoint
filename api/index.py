@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
-import json
 import numpy as np
 
 app = FastAPI()
@@ -12,7 +11,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["POST"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -276,13 +275,6 @@ class LatencyRequest(BaseModel):
     regions: List[str]
     threshold_ms: float
 
-class RegionMetrics(BaseModel):
-    region: str
-    avg_latency: float
-    p95_latency: float
-    avg_uptime: float
-    breaches: int
-
 @app.post("/api/latency")
 async def check_latency(request: LatencyRequest):
     """Analyze latency metrics for specified regions"""
@@ -300,9 +292,9 @@ async def check_latency(request: LatencyRequest):
         uptimes = [d["uptime_pct"] for d in region_data]
         
         # Calculate metrics
-        avg_latency = np.mean(latencies)
-        p95_latency = np.percentile(latencies, 95)
-        avg_uptime = np.mean(uptimes)
+        avg_latency = float(np.mean(latencies))
+        p95_latency = float(np.percentile(latencies, 95))
+        avg_uptime = float(np.mean(uptimes))
         breaches = sum(1 for lat in latencies if lat > request.threshold_ms)
         
         results.append({
@@ -314,3 +306,7 @@ async def check_latency(request: LatencyRequest):
         })
     
     return {"metrics": results}
+
+@app.get("/")
+async def root():
+    return {"message": "Latency endpoint is running. POST to /api/latency"}
