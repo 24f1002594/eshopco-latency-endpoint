@@ -1,12 +1,14 @@
 import json
 import math
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all origins
 
-# Load data into memory on startup
+# Initialize CORS generally, but we will strictly control the route below
+CORS(app)
+
+# Load data
 try:
     with open('q-vercel-latency.json', 'r') as f:
         DATASET = json.load(f)
@@ -15,24 +17,18 @@ except FileNotFoundError:
     DATASET = []
 
 def calculate_p95(values):
-    """Calculates the 95th percentile using linear interpolation."""
-    if not values:
-        return 0
+    if not values: return 0
     values.sort()
     n = len(values)
-    # Calculate rank (using n-1 for 0-based indexing interpolation)
     rank = 0.95 * (n - 1)
     lower_idx = int(math.floor(rank))
     upper_idx = int(math.ceil(rank))
-    
-    if lower_idx == upper_idx:
-        return values[lower_idx]
-    
-    # Interpolate
+    if lower_idx == upper_idx: return values[lower_idx]
     weight = rank - lower_idx
     return values[lower_idx] * (1 - weight) + values[upper_idx] * weight
 
-@app.route('/', methods=['POST'])
+@app.route('/', methods=['POST', 'OPTIONS'])
+@cross_origin(origins="*", methods=["POST"], send_wildcard=True)
 def check_latency():
     # 1. Parse Input
     req_data = request.get_json()
@@ -46,7 +42,6 @@ def check_latency():
 
     # 2. Process per region
     for region in target_regions:
-        # Filter data for this specific region
         region_records = [d for d in DATASET if d['region'] == region]
         
         if not region_records:
