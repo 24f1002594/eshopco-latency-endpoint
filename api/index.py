@@ -1,72 +1,75 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import pandas as pd
-import numpy as np
-from typing import List
+import json
+import math
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
-app = FastAPI()
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all origins
 
-# Enable CORS for POST requests from any origin
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["POST"],
-    allow_headers=["*"],
-)
-
-class LatencyRequest(BaseModel):
-    regions: List[str]
-    threshold_ms: int
-
-class RegionMetrics(BaseModel):
-    region: str
-    avg_latency: float
-    p95_latency: float
-    avg_uptime: float
-    breaches:  int
-
-class LatencyResponse(BaseModel):
-    metrics: List[RegionMetrics]
-
-# Load the telemetry data (you'll need to place your CSV file here)
-# For Vercel, place the CSV in the api directory or use a public URL
+# Load data into memory on startup
 try:
-    df = pd.read_csv('api/telemetry. csv')  # Adjust path based on where you store the CSV
+    with open('q-vercel-latency.json', 'r') as f:
+        DATASET = json.load(f)
 except FileNotFoundError:
-    df = None
+    print("Error: q-vercel-latency.json not found.")
+    DATASET = []
 
-@app.post("/", response_model=LatencyResponse)
-async def check_latency(request: LatencyRequest):
-    if df is None:
-        return {"metrics": []}
+def calculate_p95(values):
+    """Calculates the 95th percentile using linear interpolation."""
+    if not values:
+        return 0
+    values.sort()
+    n = len(values)
+    # Calculate rank (using n-1 for 0-based indexing interpolation)
+    rank = 0.95 * (n - 1)
+    lower_idx = int(math.floor(rank))
+    upper_idx = int(math.ceil(rank))
     
-    metrics = []
+    if lower_idx == upper_idx:
+        return values[lower_idx]
     
-    for region in request.regions:
-        # Filter data for the specific region
-        region_data = df[df['region']. str.lower() == region.lower()]
+    # Interpolate
+    weight = rank - lower_idx
+    return values[lower_idx] * (1 - weight) + values[upper_idx] * weight
+
+@app.route('/', methods=['POST'])
+def check_latency():
+    # 1. Parse Input
+    req_data = request.get_json()
+    if not req_data:
+        return jsonify({"error": "Invalid JSON"}), 400
         
-        if len(region_data) == 0:
+    target_regions = req_data.get('regions', [])
+    threshold = req_data.get('threshold_ms', 0)
+    
+    results = {}
+
+    # 2. Process per region
+    for region in target_regions:
+        # Filter data for this specific region
+        region_records = [d for d in DATASET if d['region'] == region]
+        
+        if not region_records:
+            results[region] = "No data found"
             continue
-        
-        # Calculate metrics
-        avg_latency = round(region_data['latency_ms'].mean(), 2)
-        p95_latency = round(region_data['latency_ms'].quantile(0.95), 2)
-        avg_uptime = round(region_data['uptime']. mean(), 2)
-        breaches = int((region_data['latency_ms'] > request.threshold_ms).sum())
-        
-        metrics.append(RegionMetrics(
-            region=region,
-            avg_latency=avg_latency,
-            p95_latency=p95_latency,
-            avg_uptime=avg_uptime,
-            breaches=breaches
-        ))
-    
-    return LatencyResponse(metrics=metrics)
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
+        latencies = [d['latency_ms'] for d in region_records]
+        uptimes = [d['uptime_pct'] for d in region_records]
+
+        # Calculate Metrics
+        avg_latency = sum(latencies) / len(latencies)
+        avg_uptime = sum(uptimes) / len(uptimes)
+        breaches = sum(1 for l in latencies if l > threshold)
+        p95 = calculate_p95(latencies)
+
+        results[region] = {
+            "avg_latency": round(avg_latency, 2),
+            "p95_latency": round(p95, 2),
+            "avg_uptime": round(avg_uptime, 3),
+            "breaches": breaches
+        }
+
+    return jsonify(results)
+
+if __name__ == '__main__':
+    app.run(port=5000, debug=True)
